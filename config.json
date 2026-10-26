@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "trigger": "^^",
+  "defaultTier": 2,
+  "maxQuestions": 4,
+  "keepAliveSec": 3000,
+  "stopBlockMax": 1,
+  "stripTokens": ["%%"],
+  "outputWeight": 5,
+  "debug": false
+}
