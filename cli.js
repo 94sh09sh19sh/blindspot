@@ -37,7 +37,7 @@ function phaseNote(job, want) {
 // plan.md 寫完後呼叫：印出要叫的視角子代理（檔位 1 改為自查）
 function prep() {
   const job = need();
-  const dir = L.jobDir(job.id);
+  const dir = L.jobDir(job);
   if (!fs.existsSync(path.join(dir, 'plan.md'))) return console.log(`還沒有 ${L.slash(path.join(dir, 'plan.md'))}，先照 playbook 寫好再執行 prep`);
   phaseNote(job, 'think');
   const lenses = L.TIERS[job.tier].lenses;
@@ -59,7 +59,7 @@ async function wait() {
     job.expect = rest;
     L.saveJob(job);
   }
-  const dir = L.jobDir(job.id);
+  const dir = L.jobDir(job);
   const limit = Date.now() + (maxSec || cfg.keepAliveSec) * 1000;
   for (;;) {
     job = L.loadJob(job.id);
@@ -74,7 +74,7 @@ async function wait() {
 // map.md 與修訂後的 plan.md 寫好後呼叫：之後才可以改專案檔案
 function go() {
   const job = need();
-  const dir = L.jobDir(job.id);
+  const dir = L.jobDir(job);
   if (!fs.existsSync(path.join(dir, 'map.md'))) return console.log(`還沒有 ${L.slash(path.join(dir, 'map.md'))}，先照 playbook 合併成覆蓋表`);
   phaseNote(job, 'review');
   job.phase = 'build';
@@ -92,7 +92,7 @@ function gap() {
   const job = need();
   phaseNote(job, 'build');
   job.phase = 'gap';
-  const dir = L.jobDir(job.id);
+  const dir = L.jobDir(job);
   if (!L.TIERS[job.tier].gapAgent) {
     job.expect = [];
     L.saveJob(job);
@@ -112,7 +112,7 @@ function fmt(u) {
 function usage(print = true) {
   const job = need();
   const u = L.usageOf(job, cfg);
-  L.writeJson(path.join(L.jobDir(job.id), 'usage.json'), u);
+  L.writeJson(path.join(L.jobDir(job), 'usage.json'), u);
   if (!print) return u;
   console.log(`主對話・想（觸發到 go）：${fmt(u.think)}`);
   console.log(`主對話・做（go 到 done）：${fmt(u.build)}`);
@@ -130,6 +130,7 @@ function done() {
   L.saveJob(job);
   const u = usage(false);
   const st = L.mapStats(job);
+  L.archiveWork(job);
   job.status = 'done';
   job.phase = 'done';
   L.saveJob(job);
@@ -143,6 +144,7 @@ function cancel() {
   let n = 0;
   for (const job of L.listJobs()) {
     if (job.status !== 'running' || (arg !== 'all' && job.id !== arg)) continue;
+    L.archiveWork(job);
     job.status = 'cancelled';
     L.saveJob(job);
     L.log(`[${job.id}] 已取消`);
@@ -157,7 +159,7 @@ function clean() {
   let n = 0;
   for (const job of L.listJobs()) {
     if (job.status === 'running' || (job.updatedAt || job.startedAt) > limit) continue;
-    fs.rmSync(L.jobDir(job.id), { recursive: true, force: true });
+    fs.rmSync(L.stateDir(job.id), { recursive: true, force: true });
     n++;
   }
   try {

@@ -30,7 +30,7 @@ function hook(input, conf = {}) {
 }
 
 const cli = (...args) => spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8', env: process.env }).stdout;
-const put = (job, file, text) => fs.writeFileSync(path.join(L.jobDir(job.id), file), text);
+const put = (job, file, text) => fs.writeFileSync(path.join(L.jobDir(job), file), text);
 const newJob = (tier, sid) => L.createJob({ tier, request: '做 X', cwd: tmp, sessionId: sid, transcriptPath: '', source: 'test' });
 const stop = (sid, extra = {}) => hook({ hook_event_name: 'Stop', session_id: sid, ...extra });
 
@@ -50,9 +50,9 @@ test('UserPromptSubmit：有觸發才建 job 並注入，沒觸發不輸出', ()
   const r = hook({ hook_event_name: 'UserPromptSubmit', session_id: 's-u', cwd: tmp, prompt: '^^3 加功能 Y', transcript_path: '' });
   const ctx = r.hookSpecificOutput.additionalContext;
   assert.match(ctx, /檔位 3/);
-  assert.match(ctx, /go 之前不得修改專案檔案/);
+  assert.match(ctx, /go 之前除了 job 目錄不得修改專案檔案/);
   const job = L.jobOfSession('s-u');
-  assert.strictEqual(fs.readFileSync(path.join(L.jobDir(job.id), 'request.md'), 'utf8').trim(), '加功能 Y');
+  assert.strictEqual(fs.readFileSync(path.join(L.jobDir(job), 'request.md'), 'utf8').trim(), '加功能 Y');
   assert.strictEqual(hook({ hook_event_name: 'UserPromptSubmit', session_id: 's-none', cwd: tmp, prompt: '普通訊息' }), null);
 });
 
@@ -114,6 +114,24 @@ test('Stop：在等背景工作時不擋，Claude Code 自己的背景工作不�
   newJob(2, 's-w');
   assert.strictEqual(stop('s-w', { background_tasks: [{ id: 'b1', type: 'shell', status: 'running' }] }), null);
   assert.strictEqual(stop('s-w', { background_tasks: [{ id: 'd', type: 'dream', status: 'running' }] }).decision, 'block');
+});
+
+test('工作目錄：放在專案的 .blindspot，git 看不到；done 後搬回 state 並清掉', () => {
+  const proj = path.join(tmp, 'proj');
+  fs.mkdirSync(proj, { recursive: true });
+  spawnSync('git', ['init', '-q'], { cwd: proj });
+  const job = L.createJob({ tier: 1, request: '做 X', cwd: proj, sessionId: 's-wd', transcriptPath: '', source: 'test' });
+  assert.strictEqual(path.dirname(job.work), path.join(proj, '.blindspot'));
+  assert.ok(fs.existsSync(path.join(job.work, 'meta.json')));
+  assert.strictEqual(spawnSync('git', ['status', '--porcelain'], { cwd: proj, encoding: 'utf8' }).stdout.trim(), '');
+  put(job, 'plan.md', 'x');
+  put(job, 'map.md', '- B1｜self｜納入｜a｜b');
+  cli('prep', job.id);
+  cli('go', job.id);
+  cli('done', job.id);
+  assert.ok(!fs.existsSync(path.join(proj, '.blindspot')));
+  assert.ok(fs.existsSync(path.join(L.stateDir(job.id), 'work', 'map.md')));
+  assert.strictEqual(L.loadJob(job.id).status, 'done');
 });
 
 test('cancel 後 Stop 不再擋', () => {

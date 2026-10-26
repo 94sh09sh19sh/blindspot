@@ -82,14 +82,59 @@ function readStdin() {
 }
 
 const slash = (p) => String(p).split(path.sep).join('/');
-const jobDir = (id) => path.join(DIRS.jobs, id);
-const metaFile = (id) => path.join(jobDir(id), 'meta.json');
+// 兩個目錄：stateDir 在 ~/.claude 底下，只有 node 寫（meta）；
+// jobDir 是主對話與子代理要寫的工作目錄，放在專案裡的 .blindspot/<id>（~/.claude 被 Claude Code 當成敏感位置，寫入會被擋）
+const WORK_NAME = '.blindspot';
+const stateDir = (id) => path.join(DIRS.jobs, id);
+const jobDir = (job) => job.work || stateDir(job.id);
+const metaFile = (id) => path.join(stateDir(id), 'meta.json');
 const sessionFile = (sid) => path.join(DIRS.sessions, `${sid}.json`);
 const loadJob = (id) => (id ? readJson(metaFile(id)) : null);
 
+// 工作目錄也放一份 meta.json，給子代理讀 cwd
 function saveJob(job) {
   job.updatedAt = Date.now();
   writeJson(metaFile(job.id), job);
+  if (job.work && fs.existsSync(job.work)) writeJson(path.join(job.work, 'meta.json'), job);
+}
+
+// 在專案裡建工作目錄；上層放內容為 * 的 .gitignore，git 看不到也不用改使用者的檔。建不了就退回 stateDir
+function makeWork(cwd, id) {
+  const base = path.join(cwd, WORK_NAME);
+  try {
+    fs.mkdirSync(path.join(base, id), { recursive: true });
+    if (!fs.existsSync(path.join(base, '.gitignore'))) fs.writeFileSync(path.join(base, '.gitignore'), '*\n');
+    return path.join(base, id);
+  } catch {
+    fs.mkdirSync(stateDir(id), { recursive: true });
+    return null;
+  }
+}
+
+function copyDir(src, dest) {
+  for (const e of fs.readdirSync(src, { withFileTypes: true })) {
+    const s = path.join(src, e.name);
+    const d = path.join(dest, e.name);
+    if (e.isDirectory()) copyDir(s, d);
+    else if (e.isFile()) {
+      fs.mkdirSync(dest, { recursive: true });
+      fs.copyFileSync(s, d);
+    }
+  }
+}
+
+// 結束或取消時：工作目錄搬到 stateDir/work，刪掉專案裡的目錄（空了連 .blindspot 一起刪）
+function archiveWork(job) {
+  if (!job.work || !fs.existsSync(job.work) || job.work.startsWith(DIRS.jobs)) return;
+  try {
+    copyDir(job.work, path.join(stateDir(job.id), 'work'));
+    fs.rmSync(job.work, { recursive: true, force: true });
+    const base = path.dirname(job.work);
+    if (fs.readdirSync(base).every((f) => f === '.gitignore')) fs.rmSync(base, { recursive: true, force: true });
+    job.work = path.join(stateDir(job.id), 'work');
+  } catch (e) {
+    log(`[${job.id}] 搬移工作目錄失敗：${e.message || e}`);
+  }
 }
 
 function listJobs() {
@@ -132,9 +177,9 @@ function parseTrigger(text, cfg) {
 function createJob({ tier, request, cwd, sessionId, transcriptPath, source }) {
   ensureDirs();
   const id = `bs${Date.now().toString(36)}`;
-  fs.mkdirSync(jobDir(id), { recursive: true });
-  fs.writeFileSync(path.join(jobDir(id), 'request.md'), `${request}\n`);
-  const job = { id, tier, cwd, sessionId, transcriptPath, source, status: 'running', phase: 'think', blocks: 0, expect: [], startedAt: Date.now() };
+  const work = makeWork(cwd, id);
+  fs.writeFileSync(path.join(work || stateDir(id), 'request.md'), `${request}\n`);
+  const job = { id, tier, cwd, work, sessionId, transcriptPath, source, status: 'running', phase: 'think', blocks: 0, expect: [], startedAt: Date.now() };
   saveJob(job);
   writeJson(sessionFile(sessionId), { jobId: id });
   log(`[${id}] 建立 job，檔位 ${tier}，來源 ${source}，${cwd}`);
@@ -144,8 +189,8 @@ function createJob({ tier, request, cwd, sessionId, transcriptPath, source }) {
 // 注入主對話的短指令
 function contextFor(job, cfg) {
   return [
-    `[blindspot] 本則指令啟用盲點檢查，檔位 ${job.tier}，job ${job.id}（${slash(jobDir(job.id))}）。觸發字串 ^^${job.tier} 是指令，不是需求內容。`,
-    `動手前先讀 ${slash(path.join(ROOT, 'playbook.md'))} 照做：執行 go 之前不得修改專案檔案；問使用者最多 ${cfg.maxQuestions} 題；跑完 done 之前不要結束回覆。`,
+    `[blindspot] 本則指令啟用盲點檢查，檔位 ${job.tier}，job ${job.id}（${slash(jobDir(job))}）。觸發字串 ^^${job.tier} 是指令，不是需求內容。`,
+    `動手前先讀 ${slash(path.join(ROOT, 'playbook.md'))} 照做：執行 go 之前除了 job 目錄不得修改專案檔案；問使用者最多 ${cfg.maxQuestions} 題；跑完 done 之前不要結束回覆。`,
   ].join('\n');
 }
 
@@ -237,14 +282,14 @@ const HANDLING = ['納入', '假設', '問使用者', '刻意不做', '駁回'];
 function mapStats(job) {
   let text = '';
   try {
-    text = fs.readFileSync(path.join(jobDir(job.id), 'map.md'), 'utf8');
+    text = fs.readFileSync(path.join(jobDir(job), 'map.md'), 'utf8');
   } catch {}
   const rows = text.split('\n').filter((l) => /^-\s*B\d+/.test(l));
   const st = { items: rows.length };
   for (const h of HANDLING) st[h] = rows.filter((l) => l.split('｜')[2]?.trim() === h).length;
   let gap = '';
   try {
-    gap = fs.readFileSync(path.join(jobDir(job.id), 'gap.md'), 'utf8');
+    gap = fs.readFileSync(path.join(jobDir(job), 'gap.md'), 'utf8');
   } catch {}
   st.gapMissed = gap.split('\n').filter((l) => /｜\s*(沒做到|部分)\s*｜/.test(l)).length;
   return st;
@@ -253,6 +298,6 @@ function mapStats(job) {
 module.exports = {
   ROOT, STATE, DIRS, LOG_FILE, HISTORY_FILE, DEFAULT_CONFIG, TIERS, MAX_TIER, HANDLING,
   ensureDirs, readJson, writeJson, loadConfig, log, readStdin, slash,
-  jobDir, metaFile, sessionFile, loadJob, saveJob, listJobs, jobOfSession,
+  stateDir, jobDir, archiveWork, metaFile, sessionFile, loadJob, saveJob, listJobs, jobOfSession,
   firstSegment, parseTrigger, createJob, contextFor, usageOf, mapStats,
 };

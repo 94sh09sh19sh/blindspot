@@ -23,6 +23,7 @@
 
 ## 流程
 1. UserPromptSubmit：偵測觸發字串（跟 iter-chain 並用時只看第一段），建立 job：`request.md`（去掉觸發字串與 `stripTokens` 的原文）、`meta.json`；注入約 100 token 的短指令。
+   - 主對話與子代理要寫的檔放在專案裡的 `.blindspot/<job>/`（上層有內容為 `*` 的 `.gitignore`，git 看不到）；`~/.claude` 底下會被 Claude Code 當成敏感位置擋下寫入。done 或 cancel 時搬到 `~/.claude/blindspot/state/jobs/<job>/work/`，專案裡的目錄刪掉。
 2. 主對話先不改專案檔，寫 `plan.md`（做法、改動範圍、假設、不做），執行 `cli.js prep`，平行叫出視角子代理，背景跑 `cli.js wait` 保溫。
 3. 子代理盲階段寫完才讀 `plan.md`，在 `lens-<視角>.md` 列出計畫沒處理或處理有問題的發現。
 4. 主對話合併成 `map.md`（覆蓋表），問使用者最多一輪，在 `plan.md` 加「修訂」，執行 `cli.js go` 後才動手實作。
