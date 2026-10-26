@@ -126,6 +126,8 @@ function done() {
   const job = need();
   if (job.status !== 'running') return console.log(`job 狀態已經是 ${job.status}`);
   if (!job.goAt) console.log('注意：沒有執行過 go，想與做的花費無法分開');
+  // 沒有 gap.md 就結算，缺口會被算成 0，之後補寫的 gap.md 也會留在專案裡
+  if (job.goAt && !fs.existsSync(path.join(L.jobDir(job), 'gap.md'))) return console.log(`還沒有 gap.md：先執行 node ${CLI} gap ${job.id} 並寫好 gap.md 再 done；要放棄用 cancel`);
   job.doneAt = Date.now();
   L.saveJob(job);
   const u = usage(false);

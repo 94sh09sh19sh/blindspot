@@ -128,6 +128,9 @@ test('工作目錄：放在專案的 .blindspot，git 看不到；done 後搬回
   put(job, 'map.md', '- B1｜self｜納入｜a｜b');
   cli('prep', job.id);
   cli('go', job.id);
+  assert.match(cli('done', job.id), /還沒有 gap\.md/);
+  assert.strictEqual(L.loadJob(job.id).status, 'running');
+  put(job, 'gap.md', '- B1｜做到｜a.js:1');
   cli('done', job.id);
   assert.ok(!fs.existsSync(path.join(proj, '.blindspot')));
   assert.ok(fs.existsSync(path.join(L.stateDir(job.id), 'work', 'map.md')));
