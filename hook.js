@@ -34,7 +34,7 @@ function onStop(input, cfg) {
   const job = L.jobOfSession(input.session_id);
   if (!job || job.status !== 'running' || input.stop_hook_active || waiting(input) || job.blocks >= cfg.stopBlockMax) return;
   if (job.phase === 'review' || job.phase === 'gap') {
-    const dir = L.jobDir(job.id);
+    const dir = L.jobDir(job);
     if (!job.expect.length || !job.expect.every((f) => fs.existsSync(path.join(dir, f)))) return;
   }
   job.blocks++;
